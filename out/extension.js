@@ -27,11 +27,49 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const canvasPage_1 = require("./canvasPage");
+class CanvasTreeDataProvider {
+    getTreeItem(element) {
+        return element;
+    }
+    getChildren(element) {
+        if (element) {
+            return Promise.resolve([]);
+        }
+        else {
+            return Promise.resolve([
+                new CanvasItem('Open Canvas', vscode.TreeItemCollapsibleState.None, {
+                    command: 'extension.openCanvas',
+                    title: 'Open Canvas',
+                    arguments: []
+                })
+            ]);
+        }
+    }
+}
+class CanvasItem extends vscode.TreeItem {
+    constructor(label, collapsibleState, command) {
+        super(label, collapsibleState);
+        this.label = label;
+        this.collapsibleState = collapsibleState;
+        this.command = command;
+        this.tooltip = `${this.label}`;
+        this.description = '';
+    }
+}
 function activate(context) {
-    console.log('Extension "my-extension" is now active!');
-    let disposable = vscode.commands.registerCommand('extension.openCanvasPage', () => {
-        (0, canvasPage_1.showCanvas)(context);
+    console.log('Activating 2D Canvas Extension');
+    const treeDataProvider = new CanvasTreeDataProvider();
+    vscode.window.registerTreeDataProvider('canvasExplorer', treeDataProvider);
+    const disposable = vscode.commands.registerCommand('extension.openCanvas', () => {
+        console.log('openCanvas command triggered');
+        (0, canvasPage_1.openCanvasPage)(context).catch(error => {
+            console.error('Error in openCanvasPage:', error);
+            vscode.window.showErrorMessage('Failed to open canvas page: ' + (error instanceof Error ? error.message : String(error)));
+        });
     });
     context.subscriptions.push(disposable);
+    console.log('2D Canvas Extension Activated');
 }
-function deactivate() { }
+function deactivate() {
+    console.log('2D Canvas Extension Deactivated');
+}

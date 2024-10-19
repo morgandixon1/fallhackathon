@@ -1,6 +1,5 @@
 "use strict";
-// This file contains a function to retrieve workspace files in a VS Code extension.
-// It searches for files in the workspace and returns their paths and contents.
+// fileService.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -36,26 +35,29 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getWorkspaceFiles = getWorkspaceFiles;
 const vscode = __importStar(require("vscode"));
-const fs = __importStar(require("fs"));
 function getWorkspaceFiles() {
     return __awaiter(this, void 0, void 0, function* () {
-        console.log('Getting workspace files');
-        if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-            console.log('No workspace folder open');
-            return [];
+        const files = [];
+        if (vscode.workspace.workspaceFolders) {
+            for (const folder of vscode.workspace.workspaceFolders) {
+                const filesInFolder = yield vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.{js,ts,py,java,c,cpp,cs,rb,go,php,html,css,json,md}'), '**/node_modules/**');
+                for (const fileUri of filesInFolder) {
+                    try {
+                        const content = yield vscode.workspace.fs.readFile(fileUri);
+                        files.push({
+                            path: fileUri.fsPath,
+                            content: content.toString(),
+                        });
+                    }
+                    catch (error) {
+                        console.error(`Failed to read file ${fileUri.fsPath}:`, error);
+                    }
+                }
+            }
         }
-        const files = yield vscode.workspace.findFiles('**/*', '**/node_modules/**');
-        console.log(`Found ${files.length} files`);
-        const fileInfos = yield Promise.all(files.slice(0, 100).map((file) => __awaiter(this, void 0, void 0, function* () {
-            try {
-                const content = yield fs.promises.readFile(file.fsPath, 'utf8');
-                return { path: file.fsPath, content: content }; // Removed content slice to include full content
-            }
-            catch (error) {
-                console.error(`Error reading file ${file.fsPath}:`, error);
-                return { path: file.fsPath, content: 'Error reading file' };
-            }
-        })));
-        return fileInfos;
+        else {
+            console.error('No workspace folders found.');
+        }
+        return files;
     });
 }

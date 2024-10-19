@@ -1,5 +1,5 @@
 "use strict";
-// generateHTML.ts
+// src/canvasPage/generateHTML.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -41,6 +41,9 @@ function generateHTML(webview, extensionUri, files, savedPositions, savedZoom) {
     const styles = (0, generateStyles_1.generateStyles)(nonce, stylesUri, highlightCssUri);
     const scripts = (0, generateScripts_1.generateScripts)(nonce, savedZoom);
     // Inject data using script tags with type="application/json"
+    const fileData = JSON.stringify(sanitizedFiles).replace(/<\/script>/g, '<\\/script>');
+    const savedPositionsData = JSON.stringify(savedPositions).replace(/<\/script>/g, '<\\/script>');
+    // Construct the HTML
     const html = `
         <!DOCTYPE html>
         <html lang="en">
@@ -72,8 +75,8 @@ function generateHTML(webview, extensionUri, files, savedPositions, savedZoom) {
             <!-- Toggle Debug Button -->
             <button id="toggleDebug">Show Debug</button>
             <!-- Data Scripts -->
-            <script id="fileData" type="application/json">${JSON.stringify(sanitizedFiles)}</script>
-            <script id="savedPositionsData" type="application/json">${JSON.stringify(savedPositions)}</script>
+            <script id="fileData" type="application/json">${fileData}</script>
+            <script id="savedPositionsData" type="application/json">${savedPositionsData}</script>
             <!-- Highlight.js JS -->
             <script nonce="${nonce}" src="${highlightJsUri}"></script>
             <script nonce="${nonce}">
