@@ -1,10 +1,8 @@
-import * as vscode from 'vscode';
-import * as fs from 'fs'; // Import the fs module
+// canvasPage.ts
 
-export interface FileInfo {
-  path: string;
-  content: string;
-}
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import { createAdjacencyArray, FileInfo, Connection } from './canvasPage/linking'; // Adjust the path if necessary
 
 export async function openCanvasPage(context: vscode.ExtensionContext) {
   console.log('openCanvasPage function called');
@@ -23,14 +21,23 @@ export async function openCanvasPage(context: vscode.ExtensionContext) {
 
   try {
     let files: FileInfo[] = [];
+    let connections: Connection[] = [];
+
     try {
       files = await getWorkspaceFiles();
       console.log(`Found ${files.length} files in workspace`);
       if (files.length > 0) {
         console.log('First file:', JSON.stringify(files[0], null, 2)); // Log the first file for debugging
       }
+
+      // Compute connections using linking.ts
+      connections = createAdjacencyArray(files);
+      console.log(`Found ${connections.length} connections`);
+      if (connections.length > 0) {
+        console.log('First connection:', JSON.stringify(connections[0], null, 2));
+      }
     } catch (error) {
-      console.error('Error getting workspace files:', error);
+      console.error('Error getting workspace files or computing connections:', error);
     }
 
     // Retrieve saved positions
@@ -43,22 +50,44 @@ export async function openCanvasPage(context: vscode.ExtensionContext) {
     }
 
     // Retrieve saved zoom level
-    let savedZoom: number = 1;
+    let savedZoom: number = 0.6; // More zoomed-out initial view
     try {
-      savedZoom = context.globalState.get<number>('canvasZoomLevel') || 1;
-      console.log('Retrieved saved zoom level:', savedZoom);
+      const storedZoom = context.globalState.get<number>('canvasZoomLevel');
+      if (storedZoom !== undefined) {
+        savedZoom = storedZoom;
+      }
+      console.log('Retrieved zoom level:', savedZoom);
     } catch (error) {
-      console.error('Error retrieving saved zoom level:', error);
+      console.error('Error retrieving zoom level:', error);
     }
 
-    // Generate the webview HTML content
-    panel.webview.html = getWebviewContent(files, savedPositions, savedZoom);
+    // Generate the webview HTML content, including connections
+    panel.webview.html = getWebviewContent(files, connections, savedPositions, savedZoom);
     console.log('Webview content set');
 
     // Handle disposal of the webview
     panel.onDidDispose(() => {
       console.log('Webview panel disposed');
     }, null, context.subscriptions);
+
+    // Set up a file watcher to update connections on file save
+    const fileWatcher = vscode.workspace.onDidSaveTextDocument(async (document) => {
+      console.log(`File saved: ${document.uri.fsPath}`);
+      // Recompute connections
+      try {
+        const updatedFiles = await getWorkspaceFiles();
+        const updatedConnections = createAdjacencyArray(updatedFiles);
+        console.log(`Updated connections: ${updatedConnections.length}`);
+
+        // Update the webview with new connections
+        panel.webview.postMessage({ command: 'updateConnections', connections: updatedConnections });
+      } catch (error) {
+        console.error('Error updating connections after file save:', error);
+        panel.webview.postMessage({ command: 'error', text: 'Failed to update connections after file save.' });
+      }
+    });
+
+    context.subscriptions.push(fileWatcher);
 
     // Handle messages from the webview
     panel.webview.onDidReceiveMessage(
@@ -84,6 +113,11 @@ export async function openCanvasPage(context: vscode.ExtensionContext) {
           case 'savePosition':
             if (message.file && message.position) {
               saveCardPosition(message.file, message.position, context);
+            }
+            return;
+          case 'removeCard':
+            if (message.file) {
+              removeCardPosition(message.file, context);
             }
             return;
           case 'saveZoom':
@@ -117,139 +151,170 @@ function generateStyles(): string {
     <style>
       /* Existing styles */
       body {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background-color: #1e1e1e;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        color: #d4d4d4;
+          margin: 0;
+          padding: 0;
+          overflow: hidden;
+          background-color: #1e1e1e;
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          color: #d4d4d4;
       }
       .scroll-area {
-        width: 100vw;
-        height: 100vh;
-        overflow: auto;
-        position: relative;
+          width: 100vw;
+          height: 100vh;
+          overflow: auto;
+          position: relative;
       }
       .canvas-container {
-        width: 8000px;
-        height: 6000px;
-        position: relative;
-        background-color: #252526;
-        transition: transform 0.2s ease;
+          width: 12000px;  /* Updated from 8000px */
+          height: 9000px;  /* Updated from 6000px */
+          position: relative;
+          background-color: #252526;
+          transition: transform 0.3s ease; /* Increased transition duration for smoother zoom */
       }
-      .card {
-        position: absolute;
-        width: 300px;
-        min-height: 200px;
-        background-color: #2d2d2d;
-        border: 1px solid #444;
-        border-radius: 8px;
-        padding: 15px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
-        cursor: grab;
-        transition: box-shadow 0.2s ease;
-        overflow: hidden;
-      }
-      .card:active {
-        box-shadow: 4px 4px 15px rgba(0,0,0,0.7);
-        cursor: grabbing;
-      }
-      .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      .card-header .file-name {
-        font-weight: bold;
-        font-size: 16px;
-        color: #569cd6;
-        word-break: break-all;
-      }
-      .card-header .save-button {
-        background-color: #0e639c;
-        border: none;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 12px;
-      }
-      .card-header .save-button:hover {
-        background-color: #1177bb;
-      }
-      .card-content {
-        width: 100%;
-        background-color: #1e1e1e;
-        border: 1px solid #444;
-        border-radius: 4px;
-        padding: 10px;
-        overflow: auto;
-        font-family: 'Courier New', monospace;
-        font-size: 12px;
-        color: #d4d4d4;
-        white-space: pre-wrap;
-      }
-      #message {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 18px;
-        color: #d4d4d4;
-      }
-      #debug {
-        position: fixed;
-        top: 50px;
-        left: 10px;
-        background: rgba(0,0,0,0.7);
-        color: white;
-        padding: 10px;
-        z-index: 1000;
-        max-height: 90vh;
-        overflow-y: auto;
-        font-size: 12px;
-        display: none;
-      }
-      #toggleDebug {
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        z-index: 1001;
-        padding: 5px 10px;
-        background-color: #007acc;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-      }
-      #toggleDebug:hover {
-        background-color: #005fa3;
-      }
-      /* Zoom Controls */
-      #controls {
-        display: flex;
-        gap: 5px;
-      }
+        .card {
+          position: absolute;
+          width: 400px; /* Increased width from 300px to 400px */
+          min-height: 200px;
+          background-color: #2d2d2d;
+          border: 1px solid #444;
+          border-radius: 8px;
+          padding: 15px;
+          box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
+          cursor: grab;
+          transition: box-shadow 0.2s ease;
+          overflow: hidden;
+        }
+        .card:active {
+          box-shadow: 4px 4px 15px rgba(0,0,0,0.7);
+          cursor: grabbing;
+        }
+        .card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 10px;
+        }
+        .card-header .file-name {
+          font-weight: bold;
+          font-size: 16px;
+          color: #569cd6;
+          word-break: break-all;
+        }
+        .card-header .save-button, .card-header .remove-button {
+          background-color: #0e639c;
+          border: none;
+          color: white;
+          padding: 5px 10px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+          margin-left: 5px;
+        }
+        .card-header .save-button:hover {
+          background-color: #1177bb;
+        }
+        .card-header .remove-button {
+          background-color: #d73a49;
+        }
+        .card-header .remove-button:hover {
+          background-color: #c5303e;
+        }
+        .card-content {
+          width: 100%;
+          background-color: #1e1e1e;
+          border: 1px solid #444;
+          border-radius: 4px;
+          padding: 10px;
+          overflow: auto;
+          font-family: 'Courier New', monospace;
+          font-size: 12px;
+          color: #d4d4d4;
+          white-space: pre-wrap;
+        }
+        #message {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          font-size: 18px;
+          color: #d4d4d4;
+        }
+        #debug {
+          position: fixed;
+          top: 50px;
+          left: 10px;
+          background: rgba(0,0,0,0.7);
+          color: white;
+          padding: 10px;
+          z-index: 1000;
+          max-height: 90vh;
+          overflow-y: auto;
+          font-size: 12px;
+          display: none;
+        }
+        #toggleDebug {
+          position: fixed;
+          top: 10px;
+          right: 10px;
+          z-index: 1001;
+          padding: 5px 10px;
+          background-color: #007acc;
+          color: white;
+          border: none;
+          border-radius: 3px;
+          cursor: pointer;
+        }
+        #toggleDebug:hover {
+          background-color: #005fa3;
+        }
+        /* Zoom Controls */
+        #controls {
+          display: flex;
+          gap: 5px;
+        }
 
-      #controls button {
-        padding: 5px 10px;
-        background-color: #0e639c;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-        font-size: 12px;
-      }
+        #controls button {
+          padding: 5px 10px;
+          background-color: #0e639c;
+          color: white;
+          border: none;
+          border-radius: 3px;
+          cursor: pointer;
+          font-size: 12px;
+        }
 
-      #controls button:hover {
-        background-color: #1177bb;
-      }
+        #controls button:hover {
+          background-color: #1177bb;
+        }
+
+        /* Connection Arrows */
+        .arrow {
+          position: absolute;
+          stroke: #ff0000;
+          stroke-width: 2;
+          marker-end: url(#arrowhead);
+        }
+
+        svg {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          z-index: 0;
+        }
     </style>
   `;
 }
 
-function generateScripts(fileData: string, savedPositionsData: string, nonce: string): string {
+function generateScripts(
+  fileData: string, 
+  connectionsData: string, 
+  savedPositionsData: string, 
+  nonce: string, 
+  savedZoom: number
+): string {
   return `
     <script nonce="${nonce}">
       (function() {
@@ -258,15 +323,18 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
         const messageElement = document.getElementById('message');
         const debugElement = document.getElementById('debug');
         const toggleDebugButton = document.getElementById('toggleDebug');
-        const zoomInButton = document.getElementById('zoomIn');
-        const zoomOutButton = document.getElementById('zoomOut');
 
-        let DEBUG_MODE = true; // Set to false to disable logs
-        let currentZoom = 1; // Initial zoom level
+        let DEBUG_MODE = true;
+        let currentZoom = ${savedZoom}; // Initialize with savedZoom
 
-        const ZOOM_STEP = 0.1; // Zoom increment/decrement
-        const MAX_ZOOM = 3; // Maximum zoom level
-        const MIN_ZOOM = 0.5; // Minimum zoom level
+        const ZOOM_STEP = 0.01; // Reduced zoom step for smoother zoom
+        const MAX_ZOOM = 2; // Increased max zoom for better usability
+        const MIN_ZOOM = 0.2; // Further decreased min zoom for larger zoom-out area
+
+        const CARD_WIDTH = 400; // Updated from 300 to 400
+        const CARD_HEIGHT = 200; // Defined card height for constraints
+        const CANVAS_WIDTH = 12000;
+        const CANVAS_HEIGHT = 9000;
 
         toggleDebugButton.addEventListener('click', () => {
           if (debugElement.style.display === 'none') {
@@ -278,25 +346,11 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
           }
         });
 
-        zoomInButton.addEventListener('click', () => {
-          if (currentZoom < MAX_ZOOM) {
-            currentZoom += ZOOM_STEP;
-            applyZoom();
-          }
-        });
-
-        zoomOutButton.addEventListener('click', () => {
-          if (currentZoom > MIN_ZOOM) {
-            currentZoom -= ZOOM_STEP;
-            applyZoom();
-          }
-        });
-
         function applyZoom() {
           canvasContainer.style.transform = \`scale(\${currentZoom})\`;
           canvasContainer.style.transformOrigin = '0 0';
-          log('Zoom applied: ' + (currentZoom * 100) + '%');
-          // Optionally, save the zoom level
+          log('Zoom applied: ' + (currentZoom * 100).toFixed(0) + '%');
+          // Save the zoom level
           vscode.postMessage({ command: 'saveZoom', zoom: currentZoom });
         }
 
@@ -315,17 +369,50 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
           vscode.postMessage({ command: 'error', text: message });
         }
 
+        // Initial Zoom Application
+        applyZoom();
+
+        // Pinch-to-zoom for trackpads
+        canvasContainer.addEventListener('gesturechange', function(e) {
+          e.preventDefault();
+          let newZoom = currentZoom * e.scale;
+          newZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+          if (newZoom !== currentZoom) {
+            currentZoom = newZoom;
+            applyZoom();
+          }
+        });
+
+        // Control + scroll wheel zoom for mouse
+        canvasContainer.addEventListener('wheel', function(e) {
+          if (e.ctrlKey) {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? -1 : 1;
+            let newZoom = currentZoom + (delta * ZOOM_STEP);
+            newZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+            if (newZoom !== currentZoom) {
+              currentZoom = newZoom;
+              applyZoom();
+            }
+          }
+        });
         log('Webview script starting');
 
         let files;
+        let connections;
         try {
           files = ${fileData};
+          connections = ${connectionsData};
           log('Files loaded: ' + files.length);
+          log('Connections loaded: ' + connections.length);
           if (files.length > 0) {
             log('First file: ' + JSON.stringify(files[0]));
           }
+          if (connections.length > 0) {
+            log('First connection: ' + JSON.stringify(connections[0]));
+          }
         } catch (e) {
-          error('Error parsing file data: ' + e.message);
+          error('Error parsing file or connection data: ' + e.message);
           return;
         }
 
@@ -337,13 +424,14 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
         } else {
           messageElement.style.display = 'none';
           createCards(files, savedPositions);
+          drawConnections(connections);
         }
 
         function generateCardHTML(file, position) {
           const fileName = file.path.split('/').pop() || 'Unnamed File';
           const left = position ? \`\${position.x}px\` : '20px';
           const top = position ? \`\${position.y}px\` : '20px';
-          const content = file.content
+          let content = file.content
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
@@ -354,7 +442,10 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
             <div class="card" data-file="\${file.path}" style="left: \${left}; top: \${top};">
               <div class="card-header">
                 <div class="file-name">\${fileName}</div>
-                <button class="save-button">Save</button>
+                <div>
+                  <button class="save-button">Save</button>
+                  <button class="remove-button">X</button>
+                </div>
               </div>
               <div class="card-content" contenteditable="true" spellcheck="false">\${content}</div>
             </div>
@@ -362,27 +453,39 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
         }
 
         function calculateInitialPosition(index, total, occupiedPositions) {
-          const cols = 5; // Number of columns in the grid
-          const spacingX = 350; // Horizontal spacing between cards
-          const spacingY = 250; // Vertical spacing between cards
-          let x, y;
-          
-          for (let row = 0; row < Math.ceil(total / cols); row++) {
-            for (let col = 0; col < cols; col++) {
-              x = 20 + col * spacingX;
-              y = 20 + row * spacingY;
-              const key = \`\${x},\${y}\`;
-              if (!occupiedPositions.has(key)) {
-                occupiedPositions.add(key);
-                return { x, y };
-              }
-            }
-          }
+          const desiredSpacingX = 450; // Increased horizontal spacing to accommodate wider cards
+          const desiredSpacingY = 300; // Increased vertical spacing
+          const cols = Math.floor(CANVAS_WIDTH / desiredSpacingX);
+          const rows = Math.ceil(total / cols);
+          const currentRow = Math.floor(index / cols);
+          const currentCol = index % cols;
 
-          // Fallback in case all predefined positions are occupied
-          x = 20 + (index % cols) * spacingX;
-          y = 20 + Math.floor(index / cols) * spacingY;
-          return { x, y };
+          let x = currentCol * desiredSpacingX + 50; // Adding margin
+          let y = currentRow * desiredSpacingY + 50; // Adding margin
+
+          // Ensure positions are within canvas bounds
+          x = Math.max(0, Math.min(x, CANVAS_WIDTH - CARD_WIDTH));
+          y = Math.max(0, Math.min(y, CANVAS_HEIGHT - CARD_HEIGHT));
+
+          // Prevent overlapping
+          let key = \`\${x},\${y}\`;
+          if (!occupiedPositions.has(key)) {
+            occupiedPositions.add(key);
+            return { x, y };
+          } else {
+            // Find the next available spot
+            let attempts = 0;
+            while (occupiedPositions.has(key) && attempts < 100) {
+              x += desiredSpacingX;
+              y += desiredSpacingY;
+              x = Math.max(0, Math.min(x, CANVAS_WIDTH - CARD_WIDTH));
+              y = Math.max(0, Math.min(y, CANVAS_HEIGHT - CARD_HEIGHT));
+              key = \`\${x},\${y}\`;
+              attempts++;
+            }
+            occupiedPositions.add(key);
+            return { x, y };
+          }
         }
 
         function createCards(files, savedPositions) {
@@ -399,8 +502,11 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
             log('Creating card for file: ' + file.path);
             let position = savedPositions[file.path];
             if (!position) {
-              // Calculate initial position to prevent stacking
               position = calculateInitialPosition(index, files.length, occupiedPositions);
+            } else {
+              // Ensure saved position is within canvas bounds
+              position.x = Math.max(0, Math.min(position.x, CANVAS_WIDTH - CARD_WIDTH));
+              position.y = Math.max(0, Math.min(position.y, CANVAS_HEIGHT - CARD_HEIGHT));
             }
             const cardHTML = generateCardHTML(file, position);
             canvasContainer.insertAdjacentHTML('beforeend', cardHTML);
@@ -408,6 +514,7 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
             if (card) {
               makeDraggable(card);
               attachSaveHandler(card, file.path);
+              attachRemoveHandler(card, file.path);
             }
           });
           log('Cards created');
@@ -418,12 +525,11 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
           let offsetX, offsetY;
 
           element.addEventListener('mousedown', (e) => {
-            // Prevent dragging when interacting with editable content or buttons
-            if (e.target.closest('.card-content') || e.target.classList.contains('save-button')) return;
+            if (e.target.closest('.card-content') || e.target.classList.contains('save-button') || e.target.classList.contains('remove-button')) return;
             isDragging = true;
             offsetX = e.clientX - element.offsetLeft;
             offsetY = e.clientY - element.offsetTop;
-            element.style.zIndex = 1000; // Bring to front
+            element.style.zIndex = 1000;
           });
 
           document.addEventListener('mousemove', (e) => {
@@ -431,22 +537,9 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
               let newX = e.clientX - offsetX;
               let newY = e.clientY - offsetY;
 
-              // Constrain within the canvas area
-              const canvasRect = canvasContainer.getBoundingClientRect();
-              const cardRect = element.getBoundingClientRect();
-
-              // Adjust positions relative to canvas
-              newX = e.clientX - canvasRect.left - offsetX;
-              newY = e.clientY - canvasRect.top - offsetY;
-
-              if (newX < 0) newX = 0;
-              if (newY < 0) newY = 0;
-              if (newX + cardRect.width > canvasRect.width) {
-                newX = canvasRect.width - cardRect.width;
-              }
-              if (newY + cardRect.height > canvasRect.height) {
-                newY = canvasRect.height - cardRect.height;
-              }
+              // Constrain within the canvas width and height
+              newX = Math.max(0, Math.min(newX, CANVAS_WIDTH - CARD_WIDTH));
+              newY = Math.max(0, Math.min(newY, CANVAS_HEIGHT - CARD_HEIGHT));
 
               element.style.left = newX + 'px';
               element.style.top = newY + 'px';
@@ -456,18 +549,17 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
           document.addEventListener('mouseup', () => {
             if (isDragging) {
               isDragging = false;
-              element.style.zIndex = 1; // Reset z-index
-              // Save the new position
-              const rect = element.getBoundingClientRect();
-              const canvasRect = canvasContainer.getBoundingClientRect();
+              element.style.zIndex = 1;
               const position = { 
-                x: rect.left - canvasRect.left, 
-                y: rect.top - canvasRect.top 
+                x: parseInt(element.style.left), 
+                y: parseInt(element.style.top) 
               };
               const filePath = element.getAttribute('data-file');
               if (filePath) {
                 vscode.postMessage({ command: 'savePosition', file: filePath, position });
               }
+              // After moving a card, redraw connections
+              vscode.postMessage({ command: 'requestRedraw' });
             }
           });
         }
@@ -487,6 +579,20 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
           });
         }
 
+        function attachRemoveHandler(card, filePath) {
+          const removeButton = card.querySelector('.remove-button');
+
+          removeButton.addEventListener('click', () => {
+            // Remove the card from the DOM
+            card.remove();
+            // Notify the extension to remove the saved position
+            vscode.postMessage({ command: 'removeCard', file: filePath });
+            log('Removed card for file: ' + filePath);
+            // After removing a card, redraw connections
+            vscode.postMessage({ command: 'requestRedraw' });
+          });
+        }
+
         // Handle messages from extension (if needed)
         window.addEventListener('message', event => {
           const message = event.data;
@@ -497,8 +603,66 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
             case 'error':
               error(message.text);
               break;
+            case 'updateConnections':
+              connections = message.connections;
+              drawConnections(connections);
+              break;
+            case 'requestRedraw':
+              drawConnections(connections);
+              break;
           }
         });
+
+        function drawConnections(connections) {
+          // Remove existing SVG if any
+          const existingSVG = document.querySelector('svg');
+          if (existingSVG) {
+            existingSVG.remove();
+          }
+
+          // Create a new SVG element
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          
+          // Define arrowhead marker
+          const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+          const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+          marker.setAttribute('id', 'arrowhead');
+          marker.setAttribute('markerWidth', '10');
+          marker.setAttribute('markerHeight', '7');
+          marker.setAttribute('refX', '0');
+          marker.setAttribute('refY', '3.5');
+          marker.setAttribute('orient', 'auto');
+          const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          polygon.setAttribute('points', '0 0, 10 3.5, 0 7');
+          polygon.setAttribute('fill', '#ff0000');
+          marker.appendChild(polygon);
+          defs.appendChild(marker);
+          svg.appendChild(defs);
+
+          connections.forEach(conn => {
+            const fromCard = document.querySelector(\`[data-file="\${conn.fromFile}"]\`);
+            const toCard = document.querySelector(\`[data-file="\${conn.toFile}"]\`);
+            if (fromCard && toCard) {
+              const startX = fromCard.offsetLeft + fromCard.offsetWidth / 2;
+              const startY = fromCard.offsetTop + fromCard.offsetHeight / 2;
+              const endX = toCard.offsetLeft + toCard.offsetWidth / 2;
+              const endY = toCard.offsetTop + toCard.offsetHeight / 2;
+
+              const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+              line.setAttribute('x1', startX.toString());
+              line.setAttribute('y1', startY.toString());
+              line.setAttribute('x2', endX.toString());
+              line.setAttribute('y2', endY.toString());
+              line.setAttribute('class', 'arrow');
+
+              svg.appendChild(line);
+            }
+          });
+
+          canvasContainer.appendChild(svg);
+        }
+
+        drawConnections(connections);
 
         log('Webview setup complete');
       })();
@@ -506,7 +670,11 @@ function generateScripts(fileData: string, savedPositionsData: string, nonce: st
   `;
 }
 
-function assembleHTML(styles: string, scripts: string, nonce: string): string {
+function assembleHTML(
+  styles: string, 
+  scripts: string, 
+  nonce: string
+): string {
   return `
     <!DOCTYPE html>
     <html lang="en">
@@ -518,10 +686,6 @@ function assembleHTML(styles: string, scripts: string, nonce: string): string {
       ${styles}
     </head>
     <body>
-      <div id="controls" style="position: fixed; top: 10px; left: 10px; z-index: 1002;">
-        <button id="zoomIn">Zoom In</button>
-        <button id="zoomOut">Zoom Out</button>
-      </div>
       <button id="toggleDebug" style="position: fixed; top: 10px; right: 10px; z-index: 1001;">Show Debug</button>
       <div id="debug" style="display: none;"></div>
       <div class="scroll-area">
@@ -538,11 +702,13 @@ function assembleHTML(styles: string, scripts: string, nonce: string): string {
 
 function getWebviewContent(
   files: FileInfo[],
+  connections: Connection[],
   savedPositions: { [key: string]: { x: number; y: number } },
   savedZoom: number
 ): string {
   console.log('Generating webview content');
   const fileData = JSON.stringify(files);
+  const connectionsData = JSON.stringify(connections);
   const savedPositionsData = JSON.stringify(savedPositions);
 
   // Define nonce for security
@@ -551,8 +717,8 @@ function getWebviewContent(
   // Generate CSS styles
   const styles = generateStyles();
 
-  // Generate JavaScript scripts with embedded generateCardHTML
-  const scripts = generateScripts(fileData, savedPositionsData, nonce);
+  // Generate JavaScript scripts with embedded generateCardHTML and initial zoom
+  const scripts = generateScripts(fileData, connectionsData, savedPositionsData, nonce, savedZoom);
 
   // Assemble the complete HTML with the same nonce
   const html = assembleHTML(styles, scripts, nonce);
@@ -567,14 +733,15 @@ async function getWorkspaceFiles(): Promise<FileInfo[]> {
     return [];
   }
 
-  const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**');
+  // Exclude .pyc files by adding '**/*.pyc' to the exclude pattern
+  const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**,**/*.pyc');
   console.log(`Found ${files.length} files`);
 
   const fileInfos: FileInfo[] = await Promise.all(
     files.slice(0, 100).map(async (file) => { // Adjust limit as needed
       try {
         const content = await fs.promises.readFile(file.fsPath, 'utf8');
-        return { path: file.fsPath, content: content }; // Removed content slice to include full content
+        return { path: file.fsPath, content: content }; // Include full content with line numbers
       } catch (error) {
         console.error(`Error reading file ${file.fsPath}:`, error);
         return { path: file.fsPath, content: 'Error reading file' };
@@ -620,6 +787,20 @@ async function saveCardPosition(filePath: string, position: { x: number; y: numb
   } catch (error) {
     console.error('Error saving card position:', error);
     vscode.window.showErrorMessage('Failed to save card position: ' + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
+async function removeCardPosition(filePath: string, context: vscode.ExtensionContext) {
+  try {
+    const positions = context.globalState.get<{ [key: string]: { x: number; y: number } }>('cardPositions') || {};
+    if (positions[filePath]) {
+      delete positions[filePath];
+      await context.globalState.update('cardPositions', positions);
+      console.log(`Removed position for ${filePath}`);
+    }
+  } catch (error) {
+    console.error('Error removing card position:', error);
+    vscode.window.showErrorMessage('Failed to remove card position: ' + (error instanceof Error ? error.message : String(error)));
   }
 }
 
