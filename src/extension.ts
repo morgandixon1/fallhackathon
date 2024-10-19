@@ -1,18 +1,14 @@
 import * as vscode from 'vscode';
-import { openCanvasPage } from './canvasPage';
+import { showCanvas } from './canvasPage';
 
 export function activate(context: vscode.ExtensionContext) {
-  // Open the canvas page immediately when the extension is activated
-  openCanvasPage();
+    console.log('Extension "my-extension" is now active!');
 
-  // Register the command to open the canvas webview
-  const disposable = vscode.commands.registerCommand('extension.openCanvas', () => {
-    openCanvasPage();
-  });
+    let disposable = vscode.commands.registerCommand('extension.openCanvasPage', () => {
+        showCanvas(context);
+    });
 
-  context.subscriptions.push(disposable);
-
-  vscode.window.showInformationMessage('2D Canvas Extension Activated');
+    context.subscriptions.push(disposable);
 }
 
 export function deactivate() {}

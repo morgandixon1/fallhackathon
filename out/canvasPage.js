@@ -1,4 +1,5 @@
 "use strict";
+// canvasPage.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -22,104 +23,91 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.openCanvasPage = openCanvasPage;
+exports.showCanvas = showCanvas;
 const vscode = __importStar(require("vscode"));
-function openCanvasPage() {
-    const panel = vscode.window.createWebviewPanel('canvasPage', '2D Canvas Page', vscode.ViewColumn.One, { enableScripts: true });
-    panel.webview.html = getWebviewContent();
-}
-function getWebviewContent() {
-    return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>2D Canvas Page</title>
-      <style>
-        body {
-          margin: 0;
-          padding: 0;
-          overflow: hidden;
-          background-color: #f0f0f0;
+const generateHTML_1 = require("./canvasPage/generateHTML");
+const fileService_1 = require("./canvasPage/fileService"); // Ensure this function is defined
+const fileOperations_1 = require("./canvasPage/fileOperations"); // Ensure these functions are defined
+function showCanvas(context) {
+    return __awaiter(this, void 0, void 0, function* () {
+        console.log('showCanvas function called');
+        // Get the extension's URI
+        const extensionUri = context.extensionUri;
+        // Create the webview panel
+        const panel = vscode.window.createWebviewPanel('canvasView', 'Canvas View', vscode.ViewColumn.One, {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')],
+        });
+        console.log('Webview panel created');
+        try {
+            // Load workspace files
+            const files = yield (0, fileService_1.getWorkspaceFiles)();
+            console.log(`Found ${files.length} files in workspace`);
+            // Retrieve saved positions and zoom level from global state
+            const savedPositions = context.globalState.get('cardPositions') || {};
+            console.log('Retrieved saved positions:', savedPositions);
+            const savedZoom = context.globalState.get('canvasZoomLevel') || 1;
+            console.log('Retrieved saved zoom level:', savedZoom);
+            // Generate the HTML content
+            panel.webview.html = (0, generateHTML_1.generateHTML)(panel.webview, extensionUri, files, savedPositions, savedZoom);
+            console.log('Webview content set');
+            panel.onDidDispose(() => {
+                console.log('Webview panel disposed');
+            }, null, context.subscriptions);
+            // Handle messages from the webview
+            panel.webview.onDidReceiveMessage(message => {
+                console.log('Received message from webview:', message);
+                switch (message.command) {
+                    case 'openFile':
+                        if (message.file) {
+                            const uri = vscode.Uri.file(message.file);
+                            vscode.workspace.openTextDocument(uri).then(doc => {
+                                vscode.window.showTextDocument(doc);
+                            }, error => {
+                                console.error('Error opening file:', error);
+                                vscode.window.showErrorMessage('Failed to open file: ' + (error instanceof Error ? error.message : String(error)));
+                            });
+                        }
+                        return;
+                    case 'updateFile':
+                        if (message.file && typeof message.content === 'string') {
+                            (0, fileOperations_1.updateFileContent)(message.file, message.content, context);
+                        }
+                        return;
+                    case 'savePosition':
+                        if (message.file && message.position) {
+                            (0, fileOperations_1.saveCardPosition)(message.file, message.position, context);
+                        }
+                        return;
+                    case 'saveZoom':
+                        if (typeof message.zoom === 'number') {
+                            (0, fileOperations_1.saveZoomLevel)(message.zoom, context);
+                        }
+                        return;
+                    case 'log':
+                        console.log('Webview log:', message.text);
+                        return;
+                    case 'error':
+                        console.error('Webview error:', message.text);
+                        vscode.window.showErrorMessage('Canvas error: ' + message.text);
+                        return;
+                }
+            }, undefined, context.subscriptions);
+            console.log('Message listeners set up');
         }
-        .canvas-container {
-          width: 4000px;
-          height: 3000px;
-          position: relative;
-          overflow: hidden;
+        catch (error) {
+            console.error('Error in showCanvas:', error);
+            vscode.window.showErrorMessage('Failed to open canvas page: ' + (error instanceof Error ? error.message : String(error)));
         }
-        canvas {
-          position: absolute;
-          top: 0;
-          left: 0;
-        }
-        .scroll-area {
-          width: 100vw;
-          height: 100vh;
-          overflow: auto;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="scroll-area">
-        <div class="canvas-container">
-          <canvas id="canvas"></canvas>
-        </div>
-      </div>
-      <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const container = document.querySelector('.canvas-container');
-
-        canvas.width = container.offsetWidth;
-        canvas.height = container.offsetHeight;
-
-        // Function to draw a grid
-        function drawGrid() {
-          ctx.strokeStyle = '#ddd';
-          ctx.lineWidth = 1;
-
-          for (let x = 0; x < canvas.width; x += 50) {
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, canvas.height);
-            ctx.stroke();
-          }
-
-          for (let y = 0; y < canvas.height; y += 50) {
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(canvas.width, y);
-            ctx.stroke();
-          }
-        }
-
-        // Function to draw some sample content
-        function drawContent() {
-          // Draw some rectangles
-          for (let i = 0; i < 20; i++) {
-            ctx.fillStyle = 'hsl(' + (Math.random() * 360) + ', 70%, 70%)';
-            ctx.fillRect(
-              Math.random() * canvas.width,
-              Math.random() * canvas.height,
-              100 + Math.random() * 200,
-              100 + Math.random() * 200
-            );
-          }
-
-          // Draw some text
-          ctx.font = '48px Arial';
-          ctx.fillStyle = 'black';
-          ctx.fillText('Scroll around to explore!', 50, 100);
-        }
-
-        // Draw the grid and content
-        drawGrid();
-        drawContent();
-      </script>
-    </body>
-    </html>
-  `;
+    });
 }

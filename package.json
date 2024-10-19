@@ -7,29 +7,58 @@
     "engines": {
       "vscode": "^1.92.0"
     },
+    "categories": ["Other"],
     "activationEvents": [
-      "onStartupFinished",
-      "workspaceContains:**/*.{js,ts,html,css}"
+      "onCommand:extension.openCanvasPage"
     ],
     "main": "./out/extension.js",
     "contributes": {
       "commands": [
         {
-          "command": "extension.openCanvas",
-          "title": "Open Canvas"
+          "command": "extension.openCanvasPage",
+          "title": "Open Canvas Page"
         }
-      ]
+      ],
+      "viewsContainers": {
+        "activitybar": [
+          {
+            "id": "canvas-explorer",
+            "title": "Canvas Explorer",
+            "icon": "images/icon.png"
+          }
+        ]
+      },
+      "views": {
+        "canvas-explorer": [
+          {
+            "id": "canvasExplorer",
+            "name": "Canvas Explorer"
+          }
+        ]
+      }
+    },
+    "assets": {
+        "media": [
+            "media/styles.css",
+            "media/highlight.min.js",
+            "media/default.min.css"
+        ]
     },
     "scripts": {
-      "build": "tsc",
-      "watch": "tsc --watch",
-      "lint": "eslint .",
-      "prepublish": "npm run build"
+      "vscode:prepublish": "npm run compile",
+      "compile": "tsc -p ./",
+      "watch": "tsc -watch -p ./",
+      "pretest": "npm run compile && npm run lint",
+      "lint": "eslint src --ext ts",
+      "test": "node ./out/test/runTest.js",
+      "build": "npm run compile"
     },
     "devDependencies": {
-      "typescript": "^5.5.4",
+      "@types/vscode": "^1.92.0",
       "@types/node": "^22.4.1",
-      "@types/vscode": "^1.92.0"
+      "@typescript-eslint/eslint-plugin": "^5.59.1",
+      "@typescript-eslint/parser": "^5.59.1",
+      "eslint": "^8.39.0",
+      "typescript": "^5.0.4"
     }
-  }
-  
+}

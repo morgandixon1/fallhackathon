@@ -1,107 +1,104 @@
+// canvasPage.ts
+
 import * as vscode from 'vscode';
+import { FileInfo } from './canvasPage/types';
+import { generateHTML } from './canvasPage/generateHTML';
+import { getWorkspaceFiles } from './canvasPage/fileService'; // Ensure this function is defined
+import { updateFileContent, saveCardPosition, saveZoomLevel } from './canvasPage/fileOperations'; // Ensure these functions are defined
 
-export function openCanvasPage() {
-  const panel = vscode.window.createWebviewPanel(
-    'canvasPage',
-    '2D Canvas Page',
-    vscode.ViewColumn.One,
-    { enableScripts: true }
-  );
+export async function showCanvas(context: vscode.ExtensionContext) {
+    console.log('showCanvas function called');
 
-  panel.webview.html = getWebviewContent();
-}
+    // Get the extension's URI
+    const extensionUri = context.extensionUri;
 
-function getWebviewContent(): string {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>2D Canvas Page</title>
-      <style>
-        body {
-          margin: 0;
-          padding: 0;
-          overflow: hidden;
-          background-color: #f0f0f0;
+    // Create the webview panel
+    const panel = vscode.window.createWebviewPanel(
+        'canvasView',
+        'Canvas View',
+        vscode.ViewColumn.One,
+        {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')],
         }
-        .canvas-container {
-          width: 4000px;
-          height: 3000px;
-          position: relative;
-          overflow: hidden;
-        }
-        canvas {
-          position: absolute;
-          top: 0;
-          left: 0;
-        }
-        .scroll-area {
-          width: 100vw;
-          height: 100vh;
-          overflow: auto;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="scroll-area">
-        <div class="canvas-container">
-          <canvas id="canvas"></canvas>
-        </div>
-      </div>
-      <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const container = document.querySelector('.canvas-container');
+    );
 
-        canvas.width = container.offsetWidth;
-        canvas.height = container.offsetHeight;
+    console.log('Webview panel created');
 
-        // Function to draw a grid
-        function drawGrid() {
-          ctx.strokeStyle = '#ddd';
-          ctx.lineWidth = 1;
+    try {
+        // Load workspace files
+        const files: FileInfo[] = await getWorkspaceFiles();
+        console.log(`Found ${files.length} files in workspace`);
 
-          for (let x = 0; x < canvas.width; x += 50) {
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, canvas.height);
-            ctx.stroke();
-          }
+        // Retrieve saved positions and zoom level from global state
+        const savedPositions = context.globalState.get<{ [key: string]: { x: number; y: number } }>('cardPositions') || {};
+        console.log('Retrieved saved positions:', savedPositions);
 
-          for (let y = 0; y < canvas.height; y += 50) {
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(canvas.width, y);
-            ctx.stroke();
-          }
-        }
+        const savedZoom = context.globalState.get<number>('canvasZoomLevel') || 1;
+        console.log('Retrieved saved zoom level:', savedZoom);
 
-        // Function to draw some sample content
-        function drawContent() {
-          // Draw some rectangles
-          for (let i = 0; i < 20; i++) {
-            ctx.fillStyle = 'hsl(' + (Math.random() * 360) + ', 70%, 70%)';
-            ctx.fillRect(
-              Math.random() * canvas.width,
-              Math.random() * canvas.height,
-              100 + Math.random() * 200,
-              100 + Math.random() * 200
-            );
-          }
+        // Generate the HTML content
+        panel.webview.html = generateHTML(
+            panel.webview,
+            extensionUri,
+            files,
+            savedPositions,
+            savedZoom
+        );
 
-          // Draw some text
-          ctx.font = '48px Arial';
-          ctx.fillStyle = 'black';
-          ctx.fillText('Scroll around to explore!', 50, 100);
-        }
+        console.log('Webview content set');
 
-        // Draw the grid and content
-        drawGrid();
-        drawContent();
-      </script>
-    </body>
-    </html>
-  `;
+        panel.onDidDispose(() => {
+            console.log('Webview panel disposed');
+        }, null, context.subscriptions);
+
+        // Handle messages from the webview
+        panel.webview.onDidReceiveMessage(
+            message => {
+                console.log('Received message from webview:', message);
+                switch (message.command) {
+                    case 'openFile':
+                        if (message.file) {
+                            const uri = vscode.Uri.file(message.file);
+                            vscode.workspace.openTextDocument(uri).then(doc => {
+                                vscode.window.showTextDocument(doc);
+                            }, error => {
+                                console.error('Error opening file:', error);
+                                vscode.window.showErrorMessage('Failed to open file: ' + (error instanceof Error ? error.message : String(error)));
+                            });
+                        }
+                        return;
+                    case 'updateFile':
+                        if (message.file && typeof message.content === 'string') {
+                            updateFileContent(message.file, message.content, context);
+                        }
+                        return;
+                    case 'savePosition':
+                        if (message.file && message.position) {
+                            saveCardPosition(message.file, message.position, context);
+                        }
+                        return;
+                    case 'saveZoom':
+                        if (typeof message.zoom === 'number') {
+                            saveZoomLevel(message.zoom, context);
+                        }
+                        return;
+                    case 'log':
+                        console.log('Webview log:', message.text);
+                        return;
+                    case 'error':
+                        console.error('Webview error:', message.text);
+                        vscode.window.showErrorMessage('Canvas error: ' + message.text);
+                        return;
+                }
+            },
+            undefined,
+            context.subscriptions
+        );
+
+        console.log('Message listeners set up');
+    } catch (error) {
+        console.error('Error in showCanvas:', error);
+        vscode.window.showErrorMessage('Failed to open canvas page: ' + (error instanceof Error ? error.message : String(error)));
+    }
 }
